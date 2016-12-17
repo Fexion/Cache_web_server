@@ -50,7 +50,7 @@ int main(int argc, char* argv[])
 
 
     int ed = epoll_create1(0);
-    char f = 1;
+
 
     epoll_event event;
     memset(&event, 0, sizeof(event));
@@ -145,7 +145,7 @@ int main(int argc, char* argv[])
                 } /* end while(true) */
 
             }
-            else if ( e_out && f ) {
+            else if ( e_out ) {
                 // Previous data block was successfully sent,
                 // and current connection is ready to eat some
                 // more data
@@ -157,7 +157,6 @@ int main(int argc, char* argv[])
                                                           : last_pos + QuantumSize;
                 write(fd, message_quant.c_str(), message_quant.length());
                 out_data_positions[fd] = new_pos;
-                f = 0;
             }
             else if ( e_in ) {
                 // Connection wants to write us some data
