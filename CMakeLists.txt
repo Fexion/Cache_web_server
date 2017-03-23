@@ -9,4 +9,4 @@ set(SOURCE_EXE server.cpp)
 #add_library(lib STATIC ${SOURCE_LIB})
 add_executable(server ${SOURCE_EXE})
 
-#target_link_libraries(server lib)
+target_link_libraries(server curl)
