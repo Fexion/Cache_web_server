@@ -16,27 +16,53 @@
 #include <string>
 #include <map>
 #include <iostream>
+#include <fstream>
+#include <sys/stat.h>
 
-#include "easy.h"
+#include <sys/types.h>
+#include <curl/curl.h>
+#include <curl/easy.h>
+
 
 using namespace std;
 
 static const uint16_t PortNumber = 3000;
-static const size_t MaxEvents = 10;
-static const size_t QuantumSize = 10 /* bytes */;
-static const string Message = "Hello world\n";
-
+static const size_t MaxEvents = 100;
 static volatile sig_atomic_t StopRequest = 0;
-void stop_handler(int s)
-{
+
+static int create_and_bind() {
+    int sd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (0 > sd) {
+        perror("Socket");
+        exit(1);
+    }
+    sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(PortNumber);
+    const socklen_t addr_size = sizeof(addr);
+    int bs = bind(sd, (const struct sockaddr*) &addr, addr_size);
+    if (0 > bs) {
+        perror("Bind");
+        close(sd);
+        exit(1);
+    }
+    return sd;
+}
+
+static void make_non_blocking(int sd) {
+    int flags = fcntl(sd, F_GETFL);
+    fcntl(sd, F_SETFL, flags | O_NONBLOCK);
+}
+
+static void stop_handler(int s) {
     StopRequest = 1;
 }
 
-int main(int argc, char* argv[])
-{
+static void starting_server(string &contents) {
     int status = 0;
-
-    int sock_fd = create_and_bind(PortNumber);
+    int sock_fd = create_and_bind();
 
     make_non_blocking(sock_fd);
 
@@ -46,11 +72,10 @@ int main(int argc, char* argv[])
         close(sock_fd);
         exit(1);
     }
-
-
+    /* Create queue */
 
     int ed = epoll_create1(0);
-
+    /* Add event handler for incoming connections */
 
     epoll_event event;
     memset(&event, 0, sizeof(event));
@@ -58,6 +83,7 @@ int main(int argc, char* argv[])
     event.events = EPOLLIN;
 
     status = epoll_ctl(ed, EPOLL_CTL_ADD, sock_fd, &event);
+
 
     if (0 > status) {
         perror("Epoll control / Kqueue kevent");
@@ -71,12 +97,11 @@ int main(int argc, char* argv[])
 
     epoll_event *pending_events = new epoll_event[MaxEvents];
 
-
     map<int,size_t> out_data_positions;
 
     while ( ! StopRequest ) {
-
         int n = epoll_wait(ed, pending_events, MaxEvents, -1);
+
 
         if (-1 == n) {
             break; // Bye!
@@ -93,12 +118,13 @@ int main(int argc, char* argv[])
             const bool e_error = emask & EPOLLERR;
             const bool e_hup = emask & EPOLLHUP;
             const bool e_out = emask & EPOLLOUT;
-            const bool e_in = emask & EPOLLIN;
             const int fd = pending_events[i].data.fd;
+
 
             if ( e_error || e_hup )
                 {
-
+                    if (e_error)
+                        cerr << "Something wrong!";
                     if (out_data_positions.count(fd)) {
                         out_data_positions.erase(fd);
                     }
@@ -134,6 +160,7 @@ int main(int argc, char* argv[])
                         event.events = EPOLLIN | EPOLLOUT;
                         status = epoll_ctl(ed, EPOLL_CTL_ADD, incoming_fd, &event);
 
+
                         if (0 > status) {
                             perror("Epoll/Kqueue control for incoming connection");
                             close(sock_fd);
@@ -149,18 +176,8 @@ int main(int argc, char* argv[])
                 // Previous data block was successfully sent,
                 // and current connection is ready to eat some
                 // more data
-                size_t last_pos = out_data_positions[fd];
-
-                const string message_quant = Message.substr(last_pos, QuantumSize);
-                size_t new_pos = message_quant.length() < QuantumSize
-                                                          ? 0
-                                                          : last_pos + QuantumSize;
-                write(fd, message_quant.c_str(), message_quant.length());
-                out_data_positions[fd] = new_pos;
-            }
-            else if ( e_in ) {
-                // Connection wants to write us some data
-                // TODO implement me the same way!
+                write(fd, contents.c_str(), contents.length());
+                close(fd);
             }
             else {
                 cerr << "This branch unreachable!" << endl;
@@ -174,5 +191,52 @@ int main(int argc, char* argv[])
 
     close(sock_fd);
     cout << "Bye!" << endl;
+}
+
+static void download(string &addr, string &name) {
+    CURL *curl;
+
+    curl = curl_easy_init();
+
+    FILE *file;
+    mkdir("cache", 0755);
+    file = fopen(("cache/" + name).c_str(),"w");
+    fprintf(file, "%s\n","HTTP/1.1 200 OK\r\nContent-Type: text/html;charset = UTF-8\r\n\r\n<!DOCTYPE html>\r\n");
+    if(curl) {
+        curl_easy_setopt(curl, CURLOPT_URL, addr.c_str());
+        curl_easy_setopt(curl,CURLOPT_FOLLOWLOCATION,1);
+        curl_easy_setopt(curl,CURLOPT_WRITEDATA, file);
+        curl_easy_perform(curl);
+        curl_easy_cleanup(curl);
+
+    } else {
+        cout << "curl error\n";
+        exit(1);
+    }
+    //file.close;
+    fclose(file);
+
+}
+
+static void open_cached_page(string &name) {
+    ifstream in("cache/" + name);
+    string contents((std::istreambuf_iterator<char>(in)),
+                    istreambuf_iterator<char>());
+
+    in.close();
+
+    starting_server(contents);
+
+}
+
+int main(int argc, char* argv[]) {
+    setlocale(LC_ALL, "Russian");
+    string addr, name;
+    addr = argv[1];
+    name = argv[2];
+    download(addr, name);
+    open_cached_page(name);
+
+
     return 0;
 }
